@@ -144,19 +144,22 @@ defmodule Periodic do
     |> Supervisor.child_spec(id: Keyword.get(opts, :id, __MODULE__))
   end
 
+  def run_job(process) do
+    GenServer.cast(process, :run_job)
+  end
+
   @impl GenServer
   def init(opts) do
-    {send_after_fun, opts} = Map.pop(opts, :send_after_fun, &Process.send_after/3)
     state = defaults() |> Map.merge(opts) |> Map.put(:timer, nil)
     {initial_delay, state} = Map.pop(state, :initial_delay, Map.fetch!(state, :every))
-    enqueue_next(initial_delay, send_after_fun)
+    enqueue_next(initial_delay, state.apply_after_fun)
     {:ok, state}
   end
 
   @impl GenServer
-  def handle_info({:run_job, send_after_fun}, state) do
+  def handle_cast(:run_job, state) do
     maybe_start_job(state)
-    enqueue_next(state.every, send_after_fun)
+    enqueue_next(state.every, state.apply_after_fun)
     {:noreply, state}
   end
 
@@ -175,7 +178,8 @@ defmodule Periodic do
       overlap?: true,
       timeout: :infinity,
       log_level: nil,
-      log_meta: []
+      log_meta: [],
+      apply_after_fun: &:timer.apply_after/4
     }
   end
 
@@ -205,10 +209,10 @@ defmodule Periodic do
   defp invoke_job({mod, fun, args}), do: apply(mod, fun, args)
   defp invoke_job(fun) when is_function(fun, 0), do: fun.()
 
-  defp enqueue_next(:infinity, _send_after_fun), do: :ok
+  defp enqueue_next(:infinity, _apply_after_fun), do: :ok
 
-  defp enqueue_next(delay, send_after_fun),
-    do: send_after_fun.(self(), {:run_job, send_after_fun}, delay)
+  defp enqueue_next(delay, apply_after_fun),
+    do: apply_after_fun.(delay, __MODULE__, :run_job, [self()])
 
   defp log(state, message) do
     if not is_nil(state.log_level), do: Logger.log(state.log_level, message, state.log_meta)
